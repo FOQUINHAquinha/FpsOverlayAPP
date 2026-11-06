@@ -1,0 +1,58 @@
+name: Build FPS Overlay
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Localizar projeto
+        shell: pwsh
+        run: |
+          $proj = Get-ChildItem -Recurse -Filter FpsOverlay.csproj | Select-Object -First 1
+          if (-not $proj) { throw "FpsOverlay.csproj nao encontrado no repositorio" }
+          Write-Host "Projeto: $($proj.FullName)"
+          "PROJ_DIR=$($proj.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Baixar PresentMon
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force pm | Out-Null
+          $tags = gh release list --repo GameTechDev/PresentMon --limit 15 --json tagName -q '.[].tagName'
+          foreach ($t in $tags) {
+            gh release download $t --repo GameTechDev/PresentMon --pattern "PresentMon-*-x64.exe" --dir pm --clobber 2>$null
+            if (Get-ChildItem pm\PresentMon-*-x64.exe -ErrorAction SilentlyContinue) { Write-Host "PresentMon: $t"; break }
+          }
+          $exe = Get-ChildItem pm\PresentMon-*-x64.exe | Select-Object -First 1
+          if (-not $exe) { throw "Nao encontrei o PresentMon nas releases" }
+          Copy-Item $exe.FullName (Join-Path $env:PROJ_DIR "PresentMon.exe")
+
+      - name: Compilar
+        shell: pwsh
+        run: dotnet publish (Join-Path $env:PROJ_DIR "FpsOverlay.csproj") -c Release -o publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FPSOverlay
+          path: publish/FPSOverlay.exe
+
+      - name: Publicar release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: publish/FPSOverlay.exe
